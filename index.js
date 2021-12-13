@@ -1,4 +1,4 @@
-const { ApolloServer, UserInputError, gql } = require('apollo-server')
+const { ApolloServer, UserInputError, gql, AuthenticationError } = require('apollo-server')
 const mongoose = require('mongoose')
 const jwt = require('jsonwebtoken')
 
@@ -80,6 +80,7 @@ const typeDefs = gql`
     allPersons(phone: YesNo): [Person!]!
     findPerson(name: String!): Person
     me: User
+    allUsers: [User!]!
   }
 
   type Mutation {
@@ -100,6 +101,9 @@ const typeDefs = gql`
       username: String!
       password: String!
     ): Token
+    addAsFriend(
+      name: String!
+    ): User
   }
   
 
@@ -131,6 +135,10 @@ const resolvers = {
     },
     me: (root, args, context) => {
       return context.currentUser
+    },
+    allUsers: async () => 
+    {
+      return await User.find({})
     }
   },
   Person: {
@@ -142,7 +150,8 @@ const resolvers = {
     }
   },
   Mutation: {
-    addPerson: async (root, args) => {
+    addPerson: async (root, args, context) => {
+      console.log('current user before changes', context.currentUser)
       // if (persons.find(p => p.name === args.name)) {
       //   throw new UserInputError('Name must be unique', {
       //     invalidArgs: args.name,
@@ -152,15 +161,32 @@ const resolvers = {
       // persons = persons.concat(person)
       // return person
       const person = new Person({...args})
-      // input validation with mongoose schema
+      const currentUser = context.currentUser
+
+      if (!currentUser) {
+        throw new AuthenticationError("not authenticated")
+      }
+
       try {
         await person.save()
+        console.log(person)
+        currentUser.friends = currentUser.friends.concat(person)
+        await currentUser.save()
+        console.log(currentUser)
       } catch (error) {
         throw new UserInputError(error.message, {
           invalidArgs: args
         })
       }
       return person
+      // input validation with mongoose schema
+      // try {
+      //   await person.save()
+      // } catch (error) {
+      //   throw new UserInputError(error.message, {
+      //     invalidArgs: args
+      //   })
+      // }
     },
     editNumber: async (root, args) => {
       // const person = persons.find(p => p.name === args.name)
@@ -205,7 +231,25 @@ const resolvers = {
       }
 
       return { value: jwt.sign(userForToken, JWT_SECRET) }
-    }       
+    },
+    
+    addAsFriend: async (root, args, { currentUser }) => {
+      const nonFriendAlready = (person) => !currentUser.friends.map(f => f._id).includes(person._id)
+
+      if (!currentUser) {
+        throw new AuthenticationError('not authenticated')
+      }
+
+      const person = await Person.findOne({ name: args.name })
+
+      if (nonFriendAlready(person)) {
+        currentUser.friends = currentUser.friends.concat(person)
+      }
+
+      await currentUser.save()
+
+      return currentUser
+    }
   }  
 }
 
