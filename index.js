@@ -4,6 +4,9 @@ const jwt = require('jsonwebtoken')
 
 const JWT_SECRET = 'NEED_HERE_A_SECRET_KEY'
 
+const { PubSub } = require('graphql-subscriptions')
+const pubsub = new PubSub()
+
 const MONGODB_URI = 'mongodb+srv://fullstack:maylaconcho@fso.eov2l.mongodb.net/grpahql?retryWrites=true&w=majority'
 
 console.log('connecting to MongoDB:', MONGODB_URI)
@@ -14,6 +17,9 @@ mongoose.connect(MONGODB_URI)
 .catch((error) => {
   console.log('error connecting to MongoDB:', error.message)
 })
+
+mongoose.set('debug', true)
+
 const uuid = require('uuid/v1')
 const Person = require('./model/Person')
 const User = require('./model/User')
@@ -52,6 +58,7 @@ const typeDefs = gql`
     name: String!
     phone: String
     address: Address!
+    friendOf: [User!]!
     id: ID!
   }
 
@@ -73,6 +80,10 @@ const typeDefs = gql`
 
   type Token {
     value: String!
+  }
+
+  type Subscription {
+    personAdded: Person!
   }
 
   type Query {
@@ -122,10 +133,12 @@ const resolvers = {
       //   args.phone === 'YES' ? person.phone : !person.phone
 
       // return persons.filter(byPhone)
+      console.log('Person.find')
       if (!args.phone) {
-        return await Person.find({})
+        return await Person.find({}).populate('friendOf')
       }
       return await Person.find({ phone: { $exists: args.phone === 'YES'}})
+      .populate('friendOf')
     },
     // findPerson: (root, args) =>
     //   persons.find(p => p.name === args.name)
@@ -147,7 +160,19 @@ const resolvers = {
         street: root.street,
         city: root.city
       }
-    }
+    },
+
+    // friendOf: async (root) => {
+    //   // return list of users
+    //   const friends = await User.find({
+    //     friends: {
+    //       $in: [root._id]
+    //     }
+    //   })
+    //   console.log('User.find')
+
+    //   return friends
+    // }
   },
   Mutation: {
     addPerson: async (root, args, context) => {
@@ -172,12 +197,18 @@ const resolvers = {
         console.log(person)
         currentUser.friends = currentUser.friends.concat(person)
         await currentUser.save()
+        console.log('current user after changes')
         console.log(currentUser)
       } catch (error) {
         throw new UserInputError(error.message, {
           invalidArgs: args
         })
       }
+
+      pubsub.publish('PERSON_ADDED', {
+        personAdded: person
+      })
+
       return person
       // input validation with mongoose schema
       // try {
@@ -198,8 +229,11 @@ const resolvers = {
       // persons = persons.map(p => p.name === args.name ? updatedPerson : p)
       // return updatedPerson
       const person = await Person.findOne({ name: args.name })
+      console.log(person)
       person.phone = args.phone
       try {
+        console.log('trying to change person"s number to')
+        console.log(person)
         await person.save()
       } catch (error) {
         throw new UserInputError(error.message, {
@@ -250,7 +284,13 @@ const resolvers = {
 
       return currentUser
     }
-  }  
+  },
+  
+  Subscription: {
+    personAdded: {
+      subscribe: () => pubsub.asyncIterator(['PERSON_ADDED'])
+    }
+  }
 }
 
 const server = new ApolloServer({
@@ -266,6 +306,7 @@ const server = new ApolloServer({
   }
 })
 
-server.listen().then(({ url }) => {
+server.listen().then(({ url, subscriptionsUrl }) => {
   console.log(`Server ready at ${url}`)
+  console.log(`Subscriptions ready at ${subscriptionsUrl}`)
 })
